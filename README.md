@@ -1,6 +1,6 @@
 # MS3DASCII Blender AddOn
 
-Python add-on for exporting and (maybe eventually) importing MilkShape3D ASCII files for Blender.
+Python add-on for exporting (and maybe eventually importing) MilkShape3D ASCII files for Blender.
 
 ## How to Install
 

@@ -8,7 +8,7 @@ from os import path
 bl_info = {
     "name": "Export to MS3DASCII",
     "author": "Mikex5",
-    "version": (0, 1, 0),
+    "version": (0, 1, 2),
     "blender": (2, 80, 0),
     "location": "File > Export > MS3DASCII",
     "description": "Export > MS3DASCII",
@@ -29,11 +29,11 @@ class MS3DMesh:
 class MS3DVertex:
     def __init__(self, flag=0, x=0, y=0, z=0, u=0, v=0, bone=-1):
         self.Flags = flag
-        self.X = x
-        self.Y = y
-        self.Z = z
-        self.U = u
-        self.V = v
+        self.X = round(x, 6)
+        self.Y = round(y, 6)
+        self.Z = round(z, 6)
+        self.U = round(u, 6)
+        self.V = round(v, 6)
         self.Bone = bone
     def __eq__(self,other):
         return ((self.X == other.X)
@@ -46,9 +46,9 @@ class MS3DVertex:
 
 class MS3DNormal:
     def __init__(self, x=0, y=0, z=0):
-        self.X = x
-        self.Y = y
-        self.Z = z
+        self.X = round(x, 6)
+        self.Y = round(y, 6)
+        self.Z = round(z, 6)
     def __eq__(self,other):
         return ((self.X == other.X)
                 and (self.Y == other.Y)
@@ -291,6 +291,15 @@ class ExportMs3dascii(Operator, ExportHelper):
                     vl.append(vidx)
                     nl.append(nidx)
                 for tidx in range(1, len(vl)-1):
+                    # Discard if this triangle is a line. It happens sometimes.
+                    vec1 = mathutils.Vector((outMesh.Vertices[vl[0]].X - outMesh.Vertices[vl[tidx]].X,
+                                            outMesh.Vertices[vl[0]].Y - outMesh.Vertices[vl[tidx]].Y,
+                                            outMesh.Vertices[vl[0]].Z - outMesh.Vertices[vl[tidx]].Z))
+                    vec2 = mathutils.Vector((outMesh.Vertices[vl[0]].X - outMesh.Vertices[vl[tidx+1]].X,
+                                            outMesh.Vertices[vl[0]].Y - outMesh.Vertices[vl[tidx+1]].Y,
+                                            outMesh.Vertices[vl[0]].Z - outMesh.Vertices[vl[tidx+1]].Z))
+                    if vec1.angle(vec2) < 0.00001:
+                        continue
                     outMesh.Triangles.append(MS3DTriangle(0,vl[0],vl[tidx],vl[tidx+1],nl[0],nl[tidx],nl[tidx+1],polyIdx+1))
             meshes.append(outMesh)
             # Best effort, Blender materials do not translate well
