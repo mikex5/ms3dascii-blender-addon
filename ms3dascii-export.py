@@ -1,4 +1,4 @@
-import bpy
+import bpy, bmesh
 import mathutils
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
@@ -115,6 +115,18 @@ class ExportMs3dascii(Operator, ExportHelper):
     export_selection: BoolProperty(
         name="Export Selected",
         description="Only export selected objects",
+        default=False,
+    )
+
+    not_export_hidden: BoolProperty(
+        name="Ignore Hidden Objects",
+        description="Don't export objects that aren't visible in the active viewport",
+        default=True,
+    )
+
+    apply_world_transformations: BoolProperty(
+        name="Apply World Transformations",
+        description="Applies all transformations that are set via the N-panel",
         default=True,
     )
 
@@ -149,10 +161,33 @@ class ExportMs3dascii(Operator, ExportHelper):
         name="Normals",
         description="Choose how normals are calculated",
         items=(
+            ("CORNER", "Per Corner", "Per Corner"),
             ("FACE", "Per Face", "Per Face"),
             ("VERTEX", "Per Vertex", "Per Vertex"),
         ),
-        default="FACE",
+        default="CORNER",
+    )
+
+    mesh_name: EnumProperty(
+        name="Mesh Names",
+        description="Choose what to use as the exported meshes' names",
+        items=(
+            ("MESHDATA", "Data Property Name", "Use the mesh's Name set in Object Data Properties"),
+            ("OBJECTNAME", "Object Name", "Use the object's name shown in Outliner/Collection")
+        ),
+        default="MESHDATA",
+    )
+
+    mesh_flag_names: bpy.props.StringProperty(
+        name="Flagged Meshes",
+        description="Put the names of the meshes you want to flag (will follow the ones set in Mesh Names), separated by commas. Meshes not found here will not be flagged (Flag 0).",
+        default=""
+    )
+
+    mesh_flag_numbers: bpy.props.StringProperty(
+        name="Flag Numbers",
+        description="Put the flag numbers corresponding to the mesh names set in Mesh Names To Flag, separated by commas. If a mesh is present in Mesh Names To Flag, but there's no corresponding flag number, it will be Flag 3.",
+        default=""
     )
 
     separate_materials: BoolProperty(
@@ -167,12 +202,48 @@ class ExportMs3dascii(Operator, ExportHelper):
         default=False,
     )
 
+    smooth_edges: BoolProperty(
+        name="Smooth Edges",
+        description="Whether to smoothen or harden the edges of the mesh",
+        default=True,
+    )
+
+    def add_obj_styled_normals(self, mesh, outMesh):
+        # This is for the per-corner normal calculation only
+        normal_lookup = {}
+        normal_indices = []
+        for corner in mesh.corner_normals:
+            normal = tuple(
+                round(float(v), 4)
+                for v in corner.vector
+            )
+            if normal not in normal_lookup:
+                nidx = len(outMesh.Normals)
+                normal_lookup[normal] = nidx
+
+                normalX, normalY, normalZ = normal
+                tempNorm = MS3DNormal(
+                    normalX,
+                    normalZ,
+                    -normalY
+                )
+                outMesh.Normals.append(tempNorm)
+
+            normal_indices.append(normal_lookup[normal])
+        return normal_indices
+
     def execute(self, context):
         # Get list of objects to export
         if self.export_selection:
-            exportList = [obj for obj in bpy.context.selected_objects if obj.type in ["MESH", "ARMATURE"]]
+            source_objects = bpy.context.selected_objects
         else:
-            exportList = [obj for obj in bpy.context.scene.collection.all_objects if obj.type in ["MESH", "ARMATURE"]]
+            source_objects = bpy.context.scene.collection.all_objects
+        exportList = [
+            obj for obj in source_objects
+            if obj.type in {"MESH", "ARMATURE"}
+            # if not_export_hidden is true then only get the objects that are not hidden
+            and (not self.not_export_hidden or not obj.hide_get())
+        ]
         meshes = []
         materials = []
         animations = []
@@ -243,24 +314,58 @@ class ExportMs3dascii(Operator, ExportHelper):
                     continue
             else:
                 obj = exportList[objidx]
+
+            # Triangulate the mesh
+            mesh = obj.data.copy() # Make a copy, don't modify the mesh we're editing
+            non_triangulated = [
+                poly.index
+                for poly in mesh.polygons
+                if len(poly.vertices) != 3
+            ]
+            if non_triangulated:
+                print(f"Non-triangulated face indices: {non_triangulated}. Automatically triangulating...")
+
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+            bmesh.ops.triangulate(bm, faces=bm.faces)
+            bm.to_mesh(mesh)
+            bm.free()
+            mesh.update()
+
+            # Check for whatever flagged mesh names the user set up
+            flagged_names = [flagged_name.strip() for flagged_name in self.mesh_flag_names.split(",") if flagged_name.strip()]
+            raw_flagged_numbers = [flagged_number.strip() for flagged_number in self.mesh_flag_numbers.split(",")]
+            flagged_numbers = []
+            for flagged_number in raw_flagged_numbers:
+                try:
+                    flagged_numbers.append(int(flagged_number))
+                except (ValueError, TypeError):
+                    flagged_numbers.append(3)
+            # If mesh name is found but a corresponding flag number is not found, default to 3
+            mesh_flags = {
+                flagged_name: flagged_numbers[i] if i < len(flagged_numbers) else 3
+                for i, flagged_name in enumerate(flagged_names)
+            }
+            
             # Parse the mesh
-            mesh = obj.data
-            outMesh = MS3DMesh(mesh.name, 0, objidx)
+            meshName = mesh.name if self.mesh_name == "MESHDATA" else obj.name
+            meshFlag = mesh_flags.get(meshName, 0) # If the mesh name isn't flagged, default to 0
+            outMesh = MS3DMesh(meshName, meshFlag, objidx)
+            corner_normal_indices = []
+            if self.export_normals == "CORNER":
+                corner_normal_indices = self.add_obj_styled_normals(mesh, outMesh)
+
             for polyIdx in range(len(mesh.polygons)):
                 poly = mesh.polygons[polyIdx]
                 vl = []
                 nl = []
-                if self.export_normals == "FACE":
-                    tempNorm = MS3DNormal(poly.normal[1],poly.normal[2],poly.normal[0])
-                    try:
-                        nidx = outMesh.Normals.index(tempNorm)
-                    except ValueError:
-                        nidx = len(outMesh.Normals)
-                        outMesh.Normals.append(tempNorm)
+                
                 # TODO: consider using MeshLoopTriangle https://docs.blender.org/api/current/bpy.types.MeshLoopTriangle.html
                 for lidx in poly.loop_indices:
                     loop = mesh.loops[lidx]
                     vcoords = mesh.vertices[loop.vertex_index].co
+                    if self.apply_world_transformations:
+                        vcoords = obj.matrix_world @ vcoords
                     vtexmap = mesh.uv_layers.active.data[lidx].uv
                     # Determine the bone for this vertex
                     vweight = 0
@@ -274,23 +379,36 @@ class ExportMs3dascii(Operator, ExportHelper):
                             vweight = weight
                             if weight >= self.bone_threshold:
                                 vbone = bone.index
-                    tempVert = MS3DVertex(0, vcoords[1], vcoords[2], vcoords[0], vtexmap[0], vtexmap[1]*-1, vbone)
+                    # tempVert = MS3DVertex(meshFlag, vcoords[1], vcoords[2], vcoords[0], vtexmap[0], vtexmap[1]*-1, vbone)
+                    tempVert = MS3DVertex(meshFlag, vcoords[0], vcoords[2], -vcoords[1], vtexmap[0], 1-vtexmap[1], vbone)
                     try:
                         vidx = outMesh.Vertices.index(tempVert)
                     except ValueError:
                         vidx = len(outMesh.Vertices)
                         outMesh.Vertices.append(tempVert)
-                    if self.export_normals != "FACE":
+
+                    if self.export_normals == "VERTEX":
                         vnorm = mesh.vertices[loop.vertex_index].normal
                         tempNorm = MS3DNormal(vnorm[1], vnorm[2], vnorm[0])
+                    elif self.export_normals == "FACE":
+                        tempNorm = MS3DNormal(poly.normal[1],poly.normal[2],poly.normal[0])
+                    elif self.export_normals == "CORNER":
+                        nidx = corner_normal_indices[lidx]
+                    else:
+                        raise ValueError(f"Invalid normals domain")
+                    
+                    if self.export_normals != "CORNER":
                         try:
                             nidx = outMesh.Normals.index(tempNorm)
                         except ValueError:
                             nidx = len(outMesh.Normals)
                             outMesh.Normals.append(tempNorm)
+
                     vl.append(vidx)
                     nl.append(nidx)
+
                 for tidx in range(1, len(vl)-1):
+                    
                     # Discard if this triangle is a line. It happens sometimes.
                     vec1 = mathutils.Vector((outMesh.Vertices[vl[0]].X - outMesh.Vertices[vl[tidx]].X,
                                             outMesh.Vertices[vl[0]].Y - outMesh.Vertices[vl[tidx]].Y,
@@ -300,7 +418,9 @@ class ExportMs3dascii(Operator, ExportHelper):
                                             outMesh.Vertices[vl[0]].Z - outMesh.Vertices[vl[tidx+1]].Z))
                     if vec1.angle(vec2) < 0.00001:
                         continue
-                    outMesh.Triangles.append(MS3DTriangle(0,vl[0],vl[tidx],vl[tidx+1],nl[0],nl[tidx],nl[tidx+1],polyIdx+1))
+
+                    outMesh.Triangles.append(MS3DTriangle(meshFlag,vl[0],vl[tidx],vl[tidx+1],nl[0],nl[tidx],nl[tidx+1],1 if self.smooth_edges else 0))
+                    
             meshes.append(outMesh)
             # Best effort, Blender materials do not translate well
             mat = obj.active_material
