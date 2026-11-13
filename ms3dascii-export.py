@@ -181,13 +181,13 @@ class ExportMs3dascii(Operator, ExportHelper):
     mesh_flag_names: bpy.props.StringProperty(
         name="Flagged Meshes",
         description="Put the names of the meshes you want to flag (will follow the ones set in Mesh Names), separated by commas. Meshes not found here will not be flagged (Flag 0).",
-        default="pingas, pingas.001"
+        default=""
     )
 
     mesh_flag_numbers: bpy.props.StringProperty(
         name="Flag Numbers",
         description="Put the flag numbers corresponding to the mesh names set in Mesh Names To Flag, separated by commas. If a mesh is present in Mesh Names To Flag, but there's no corresponding flag number, it will be Flag 3.",
-        default="3, 3"
+        default=""
     )
 
     separate_materials: BoolProperty(
@@ -202,7 +202,7 @@ class ExportMs3dascii(Operator, ExportHelper):
         default=False,
     )
 
-    smoothie: BoolProperty(
+    smooth_edges: BoolProperty(
         name="Smooth Edges",
         description="Whether to smoothen or harden the edges of the mesh",
         default=True,
@@ -221,11 +221,11 @@ class ExportMs3dascii(Operator, ExportHelper):
                 nidx = len(outMesh.Normals)
                 normal_lookup[normal] = nidx
 
-                judge, jury, executioner = normal
+                normalX, normalY, normalZ = normal
                 tempNorm = MS3DNormal(
-                    judge,
-                    executioner,
-                    -jury
+                    normalX,
+                    normalZ,
+                    -normalY
                 )
                 outMesh.Normals.append(tempNorm)
 
@@ -349,8 +349,8 @@ class ExportMs3dascii(Operator, ExportHelper):
             
             # Parse the mesh
             meshName = mesh.name if self.mesh_name == "MESHDATA" else obj.name
-            flaggg = mesh_flags.get(meshName, 0) # If the mesh name isn't flagged, default to 0
-            outMesh = MS3DMesh(meshName, flaggg, objidx)
+            meshFlag = mesh_flags.get(meshName, 0) # If the mesh name isn't flagged, default to 0
+            outMesh = MS3DMesh(meshName, meshFlag, objidx)
             corner_normal_indices = []
             if self.export_normals == "CORNER":
                 corner_normal_indices = self.add_obj_styled_normals(mesh, outMesh)
@@ -379,8 +379,8 @@ class ExportMs3dascii(Operator, ExportHelper):
                             vweight = weight
                             if weight >= self.bone_threshold:
                                 vbone = bone.index
-                    # tempVert = MS3DVertex(flaggg, vcoords[1], vcoords[2], vcoords[0], vtexmap[0], vtexmap[1]*-1, vbone)
-                    tempVert = MS3DVertex(flaggg, vcoords[0], vcoords[2], -vcoords[1], vtexmap[0], 1-vtexmap[1], vbone)
+                    # tempVert = MS3DVertex(meshFlag, vcoords[1], vcoords[2], vcoords[0], vtexmap[0], vtexmap[1]*-1, vbone)
+                    tempVert = MS3DVertex(meshFlag, vcoords[0], vcoords[2], -vcoords[1], vtexmap[0], 1-vtexmap[1], vbone)
                     try:
                         vidx = outMesh.Vertices.index(tempVert)
                     except ValueError:
@@ -395,7 +395,7 @@ class ExportMs3dascii(Operator, ExportHelper):
                     elif self.export_normals == "CORNER":
                         nidx = corner_normal_indices[lidx]
                     else:
-                        raise ValueError(f"Penis")
+                        raise ValueError(f"Invalid normals domain")
                     
                     if self.export_normals != "CORNER":
                         try:
@@ -419,7 +419,7 @@ class ExportMs3dascii(Operator, ExportHelper):
                     if vec1.angle(vec2) < 0.00001:
                         continue
 
-                    outMesh.Triangles.append(MS3DTriangle(flaggg,vl[0],vl[tidx],vl[tidx+1],nl[0],nl[tidx],nl[tidx+1],1 if self.smoothie else 0))
+                    outMesh.Triangles.append(MS3DTriangle(meshFlag,vl[0],vl[tidx],vl[tidx+1],nl[0],nl[tidx],nl[tidx+1],1 if self.smooth_edges else 0))
                     
             meshes.append(outMesh)
             # Best effort, Blender materials do not translate well
